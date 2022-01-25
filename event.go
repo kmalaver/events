@@ -2,27 +2,24 @@ package events
 
 import (
 	"sync"
-	"reflect"
 )
 
 type Event[T any] interface {
-	Subscribe(subscriber func(data T))
-	SubscribeOnce(subscriber func(data T))
-	Unsubscribe(subscriber func(data T))
-	SubscribeAsync(subscriber func(data T), transactional bool)
-	SubscribeOnceAsync(subscriber func(data T), transactional bool)
+	Subscribe(subscriber func(data T)) (unsubscribe func())
+	SubscribeOnce(subscriber func(data T)) (unsubscribe func())
+	SubscribeAsync(subscriber func(data T), opts ...bool) (unsubscribe func())
+	SubscribeOnceAsync(subscriber func(data T), opts ...bool) (unsubscribe func())
 	Dispatch(data T)
 	Wait()
 }
 
-
 type event[T any] struct {
-	handlers []*handler[T]
+	handlers []*eventHandler[T]
 	lock 			sync.Mutex
 	wg 				sync.WaitGroup
 }
 
-type handler[T any] struct {
+type eventHandler[T any] struct {
 	subscriber func(T)
 	once bool
 	async bool
@@ -33,50 +30,52 @@ func New[T any]() Event[T] {
 	return &event[T]{}
 }
 
-func (e *event[T]) Subscribe(subscriber func(T)) {
-	e.addSubscriber(&handler[T]{
+func (e *event[T]) Subscribe(subscriber func(T)) func() {
+	return e.addSubscriber(&eventHandler[T]{
 		subscriber: subscriber,
 	})
 }
 
-func (e *event[T]) SubscribeOnce(subscriber func(T)) {
-	e.addSubscriber(&handler[T]{
+func (e *event[T]) SubscribeOnce(subscriber func(T)) func() {
+	return e.addSubscriber(&eventHandler[T]{
 		subscriber: subscriber,
 		once: true,
 	})
 }
 
-func (e *event[T]) SubscribeAsync(subscriber func(T), transactional bool) {
-	e.addSubscriber(&handler[T]{
+func (e *event[T]) SubscribeAsync(subscriber func(T), opts ...bool) func() { 
+	transactional := false
+	if len(opts) > 0 {
+		transactional = opts[0]
+	}
+
+	return e.addSubscriber(&eventHandler[T]{
 		subscriber: subscriber,
 		async: true,
 		transactional: transactional,
 	})
 }
 
-func (e *event[T]) SubscribeOnceAsync(subscriber func(T), transactional bool) {
-	e.addSubscriber(&handler[T]{
+func (e *event[T]) SubscribeOnceAsync(subscriber func(T), opts ...bool) func() {
+	transactional := false
+	if len(opts) > 0 {
+		transactional = opts[0]
+	}
+	return e.addSubscriber(&eventHandler[T]{
 		subscriber: subscriber,
 		once: true,
 		async: true,
 		transactional: transactional,
 	})
 }
-
-func (e *event[T]) Unsubscribe(subscriber func(T)) {
-	e.lock.Lock()
-	defer e.lock.Unlock()
-	idx := e.findHandler(subscriber)
-	e.removeHandler(idx)
-}
-
 
 func (e *event[T]) Dispatch(data T) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
-	handlersCopy := make([]*handler[T], len(e.handlers))
+	handlersCopy := make([]*eventHandler[T], len(e.handlers))
 	copy(handlersCopy, e.handlers)
+
 	for i, handler := range handlersCopy {
 		if handler.once {
 			e.removeHandler(i)
@@ -94,7 +93,7 @@ func (e *event[T]) Wait() {
 	e.wg.Wait()
 }
 
-func (e *event[T]) callHandlerAsync(h *handler[T], data T) {
+func (e *event[T]) callHandlerAsync(h *eventHandler[T], data T) {
 	defer e.wg.Done()
 	if h.transactional {
 		e.lock.Lock()
@@ -111,20 +110,24 @@ func (e *event[T]) removeHandler(idx int) {
 	e.handlers = append(e.handlers[:idx], e.handlers[idx+1:]...)
 }
 
-func (e *event[T]) findHandler(subscriber func(T)) int {
-	for idx, s := range e.handlers {
-		fn1 := reflect.ValueOf(s.subscriber).Pointer()
-		fn2 := reflect.ValueOf(subscriber).Pointer()
-		if fn1 == fn2 {
-			return idx
+func (e *event[T]) findHandler(h *eventHandler[T]) int {
+	for i := range e.handlers {
+		if e.handlers[i] == h {
+			return i
 		}
 	}
 	return -1
 }
 
 
-func (e *event[T]) addSubscriber(h *handler[T]) {
+func (e *event[T]) addSubscriber(h *eventHandler[T]) func() {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 	e.handlers = append(e.handlers, h)
+
+	return func() {
+		e.lock.Lock()
+		defer e.lock.Unlock()
+		e.removeHandler(e.findHandler(h))
+	}
 }
