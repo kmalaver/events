@@ -4,71 +4,72 @@ import (
 	"sync"
 )
 
-type Event[T any] interface {
-	Subscribe(subscriber func(data T)) (unsubscribe func())
-	SubscribeOnce(subscriber func(data T)) (unsubscribe func())
-	SubscribeAsync(subscriber func(data T), opts ...bool) (unsubscribe func())
-	SubscribeOnceAsync(subscriber func(data T), opts ...bool) (unsubscribe func())
-	Dispatch(data T)
-	Wait()
-}
-
 type event[T any] struct {
 	handlers []*eventHandler[T]
-	lock 			sync.Mutex
-	wg 				sync.WaitGroup
+	lock     sync.Mutex
+	wg       sync.WaitGroup
 }
 
 type eventHandler[T any] struct {
-	subscriber func(T)
-	once bool
-	async bool
+	subscriber    func(T)
+	once          bool
+	async         bool
 	transactional bool
 }
 
-func New[T any]() Event[T] {
+// Returns new event
+func New[T any]() *event[T] {
 	return &event[T]{}
 }
 
+// Subscribes to event and returns unsubscribe function
 func (e *event[T]) Subscribe(subscriber func(T)) func() {
 	return e.addSubscriber(&eventHandler[T]{
 		subscriber: subscriber,
 	})
 }
 
+// Subscribe to event once and returns unsubscribe function.
+// Subscriber will be called only once
 func (e *event[T]) SubscribeOnce(subscriber func(T)) func() {
 	return e.addSubscriber(&eventHandler[T]{
 		subscriber: subscriber,
-		once: true,
+		once:       true,
 	})
 }
 
-func (e *event[T]) SubscribeAsync(subscriber func(T), opts ...bool) func() { 
+// Subscribe to event and call subscriber in separate goroutine.
+// Can be passed transactional bool to make subscriber transactional
+func (e *event[T]) SubscribeAsync(subscriber func(T), opts ...bool) func() {
 	transactional := false
 	if len(opts) > 0 {
 		transactional = opts[0]
 	}
 
 	return e.addSubscriber(&eventHandler[T]{
-		subscriber: subscriber,
-		async: true,
+		subscriber:    subscriber,
+		async:         true,
 		transactional: transactional,
 	})
 }
 
+// Subscribe to event and call subscriber in separate goroutine.
+// Will be called only once.
+// Can be passed transactional bool to make subscriber transactional
 func (e *event[T]) SubscribeOnceAsync(subscriber func(T), opts ...bool) func() {
 	transactional := false
 	if len(opts) > 0 {
 		transactional = opts[0]
 	}
 	return e.addSubscriber(&eventHandler[T]{
-		subscriber: subscriber,
-		once: true,
-		async: true,
+		subscriber:    subscriber,
+		once:          true,
+		async:         true,
 		transactional: transactional,
 	})
 }
 
+// Dispatch event to all subscribers
 func (e *event[T]) Dispatch(data T) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
@@ -83,23 +84,33 @@ func (e *event[T]) Dispatch(data T) {
 		if !handler.async {
 			handler.subscriber(data)
 		} else {
-			e.wg.Add(1)
-			go e.callHandlerAsync(handler, data)
+			e.callHandlerAsync(handler, data)
 		}
 	}
 }
 
+// Wait for all async subscribers to finish
 func (e *event[T]) Wait() {
 	e.wg.Wait()
 }
 
 func (e *event[T]) callHandlerAsync(h *eventHandler[T], data T) {
-	defer e.wg.Done()
+	e.wg.Add(1)
+
+	var wg sync.WaitGroup
 	if h.transactional {
-		e.lock.Lock()
-		defer e.lock.Unlock()
+		wg.Add(1)
 	}
-	h.subscriber(data)
+	go func() {
+		defer e.wg.Done()
+		h.subscriber(data)
+		if h.transactional {
+			wg.Done()
+		}
+	}()
+	if h.transactional {
+		wg.Wait()
+	}
 }
 
 func (e *event[T]) removeHandler(idx int) {
@@ -118,7 +129,6 @@ func (e *event[T]) findHandler(h *eventHandler[T]) int {
 	}
 	return -1
 }
-
 
 func (e *event[T]) addSubscriber(h *eventHandler[T]) func() {
 	e.lock.Lock()
