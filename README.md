@@ -1,11 +1,11 @@
 # Events
 
-Simple go type safe events library.
+Lightweight generic events library for go
 
 ## Installation
 
 ```bash
-go get github.com/go-events/events
+go get github.com/kmalaver/events
 ```
 
 ## Usage
