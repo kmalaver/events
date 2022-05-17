@@ -26,6 +26,18 @@ func main() {
 
   // Dispatch event
   e.Dispatch("Hello world!")
+  
 }
 
 ```	
+
+## Event methods
+
+```go
+Subscribe(f func(payload T)) (unsubscribe func())
+Dispatch(payload T)
+SubscribeOnce(f func(payload T)) (unsubscribe func())
+SubscribeAsync(f func(payload T)) (unsubscribe func())
+SubscribeOnceAsync(f func(payload T)) (unsubscribe func())
+Wait()
+```
